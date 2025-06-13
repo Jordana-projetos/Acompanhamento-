@@ -180,6 +180,7 @@
 
         // Variáveis de configuração do Firebase
         // *** SEUS VALORES REAIS DO PROJETO FIREBASE ***
+        // Estes são os valores que você já forneceu e que estão corretos.
         const YOUR_FIREBASE_PROJECT_ID = "pos-venda-70d24"; 
         const YOUR_FIREBASE_CONFIG = { 
           apiKey: "AIzaSyDzwD9u241jYU5ZIc3YOIKFzWcx32hB8lg",
@@ -240,14 +241,16 @@
 
         async function initializeFirebase() {
             try {
-                if (Object.keys(firebaseConfig).length === 0 || !firebaseConfig.projectId || firebaseConfig.projectId === "SEU_PROJECT_ID_AQUI") {
-                    console.error("Firebase config não fornecida ou incompleta. Por favor, substitua os valores placeholder pelas suas credenciais Firebase reais.");
+                // Verificação para garantir que a configuração está presente e não são placeholders
+                if (!firebaseConfig || !firebaseConfig.projectId || firebaseConfig.projectId === "SEU_PROJECT_ID_AQUI") {
+                    console.error("Firebase config não fornecida ou incompleta. Verifique se substituiu os valores placeholder pelas suas credenciais Firebase reais.");
                     userIdDisplay.textContent = "ERRO: Configure o Firebase";
                     return;
                 }
                 
                 // Adicionado para depuração: Log da configuração do Firebase usada
                 console.log("Initializing Firebase with config:", firebaseConfig); 
+                console.log("Firebase App ID being used for collection path:", appId); 
 
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -263,9 +266,10 @@
                     } else {
                         // Se não houver usuário, tenta fazer login anónimamente
                         try {
+                            console.log("Tentando autenticar anonimamente...");
                             await signInAnonymously(auth);
                         } catch (error) {
-                            console.error("Erro na autenticação anónima:", error);
+                            console.error("Erro na autenticação anónima: ", error);
                             userIdDisplay.textContent = "Erro de Autenticação";
                         }
                     }
@@ -281,12 +285,22 @@
                 console.warn("Firestore não está pronto para iniciar o listener.");
                 return;
             }
+            if (!currentUserId) {
+                 // Esta verificação é importante: o listener só deve iniciar se houver um userID válido
+                 console.warn("User ID não disponível para iniciar o listener Firestore. Aguardando autenticação.");
+                 return;
+            }
 
             // Caminho da coleção para dados partilhados por toda a equipa
-            const colRef = collection(db, `artifacts/${appId}/pos_venda_acompanhamento_publico`);
+            const collectionPath = `artifacts/${appId}/pos_venda_acompanhamento_publico`;
+            console.log("Iniciando listener para a coleção:", collectionPath); // Depuração do caminho da coleção
+            const colRef = collection(db, collectionPath);
             const q = query(colRef);
 
             // onSnapshot para ouvir alterações em tempo real
+            // Este listener é a chave para a persistência e colaboração.
+            // Sempre que há uma mudança no Firestore, esta função é executada,
+            // atualizando 'postSaleData' e re-renderizando a tabela.
             onSnapshot(q, (snapshot) => {
                 const newPostSaleData = [];
                 snapshot.forEach(doc => {
@@ -294,6 +308,7 @@
                     newPostSaleData.push({ id: doc.id, ...doc.data() });
                 });
                 postSaleData = newPostSaleData;
+                console.log("Dados carregados do Firestore:", postSaleData); // Log dos dados carregados
                 renderTable(); 
             }, (error) => {
                 console.error("Erro ao ouvir dados do Firestore:", error);
@@ -304,21 +319,23 @@
         // Adicionar ou atualizar dados no Firestore
         async function saveEntry(itemData, docId = null) {
             if (!db || !currentUserId) {
-                console.error("Firestore ou User ID não estão prontos para salvar.");
+                console.error("Firestore ou User ID não estão prontos para salvar. currentUserId:", currentUserId);
                 // Você pode exibir uma mensagem de erro na UI para o utilizador
                 return;
             }
             try {
+                // A coleção onde os dados serão guardados
                 const colRef = collection(db, `artifacts/${appId}/pos_venda_acompanhamento_publico`);
+                
                 if (docId) {
-                    // Atualizar documento existente
+                    // Se houver um docId, atualiza um documento existente
                     const docRef = doc(db, `artifacts/${appId}/pos_venda_acompanhamento_publico`, docId);
                     await updateDoc(docRef, itemData);
-                    console.log("Documento atualizado com sucesso:", docId);
+                    console.log("Documento atualizado com sucesso no Firestore:", docId, itemData);
                 } else {
-                    // Adicionar novo documento
+                    // Se não houver docId, adiciona um novo documento
                     const newDocRef = await addDoc(colRef, itemData);
-                    console.log("Novo documento adicionado com ID:", newDocRef.id);
+                    console.log("Novo documento adicionado no Firestore com ID:", newDocRef.id, itemData);
                 }
             } catch (e) {
                 console.error("Erro ao salvar dados no Firestore:", e);
@@ -335,7 +352,7 @@
             try {
                 const docRef = doc(db, `artifacts/${appId}/pos_venda_acompanhamento_publico`, docId);
                 await deleteDoc(docRef);
-                console.log("Documento excluído com sucesso:", docId);
+                console.log("Documento excluído com sucesso do Firestore:", docId);
             } catch (e) {
                 console.error("Erro ao excluir dados do Firestore:", e);
             }
@@ -352,15 +369,17 @@
             return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
         }
 
-        // --- Funções de Renderização e Atualização ---
+        // --- Funções de Renderização e Atualização da UI ---
         function renderTable() {
-            dataTableBody.innerHTML = '';
+            dataTableBody.innerHTML = ''; // Limpa a tabela antes de preencher
             const filteredData = postSaleData.filter(item => {
+                // Lógica de filtragem baseada nos valores dos inputs de filtro
                 const dateMatch = currentFilters.date ? item.date.includes(currentFilters.date) : true;
                 const clientMatch = currentFilters.client ? item.client.toLowerCase().includes(currentFilters.client.toLowerCase()) : true;
                 const activityTypeMatch = currentFilters.activityType ? item.activityType.toLowerCase().includes(currentFilters.activityType.toLowerCase()) : true;
                 const descriptionMatch = currentFilters.description ? item.description.toLowerCase().includes(currentFilters.description.toLowerCase()) : true;
-                const valueMatch = currentFilters.value === '' || item.value === parseFloat(currentFilters.value);
+                // Para o filtro de valor, verifica se o filtro está vazio ou se o valor corresponde
+                const valueMatch = currentFilters.value === '' || item.value === parseFloat(currentFilters.value); 
                 const statusMatch = currentFilters.status ? item.status === currentFilters.status : true;
                 const paymentDateMatch = currentFilters.paymentDate ? item.paymentDate.includes(currentFilters.paymentDate) : true;
                 const observationsMatch = currentFilters.observations ? item.observations.toLowerCase().includes(currentFilters.observations.toLowerCase()) : true;
@@ -368,27 +387,29 @@
                 return dateMatch && clientMatch && activityTypeMatch && descriptionMatch && valueMatch && statusMatch && paymentDateMatch && observationsMatch;
             });
 
+            // Cria e insere as linhas na tabela
             filteredData.forEach(item => {
-                let rowClass = 'bg-white';
-                let valueClass = 'text-gray-900';
-                let statusBadgeClass = '';
+                let rowClass = 'bg-white'; // Classe CSS padrão para a linha da tabela
+                let valueClass = 'text-gray-900'; // Classe CSS padrão para o valor
+                let statusBadgeClass = ''; // Classe CSS para o "badge" do status
 
+                // Aplica formatação condicional baseada no 'status' do item
                 switch (item.status) {
                     case 'Pago':
-                        rowClass = 'bg-green-50';
-                        statusBadgeClass = 'bg-green-200 text-green-800';
-                        valueClass = 'text-green-700 font-semibold';
+                        rowClass = 'bg-green-50'; // Fundo verde claro
+                        statusBadgeClass = 'bg-green-200 text-green-800'; // Badge verde
+                        valueClass = 'text-green-700 font-semibold'; // Texto verde para o valor
                         break;
                     case 'Pendente':
-                        rowClass = 'bg-yellow-50';
-                        statusBadgeClass = 'bg-yellow-200 text-yellow-800';
-                        valueClass = 'text-yellow-700 font-semibold';
+                        rowClass = 'bg-yellow-50'; // Fundo amarelo claro
+                        statusBadgeClass = 'bg-yellow-200 text-yellow-800'; // Badge amarelo
+                        valueClass = 'text-yellow-700 font-semibold'; // Texto amarelo para o valor
                         break;
                     case 'Não Cobrado':
                     case 'Não Aplicável':
-                        rowClass = 'bg-gray-50';
-                        statusBadgeClass = 'bg-gray-200 text-gray-800';
-                        valueClass = 'text-gray-500';
+                        rowClass = 'bg-gray-50'; // Fundo cinza claro
+                        statusBadgeClass = 'bg-gray-200 text-gray-800'; // Badge cinza
+                        valueClass = 'text-gray-500'; // Texto cinza para o valor
                         break;
                 }
 
@@ -411,28 +432,36 @@
                 dataTableBody.innerHTML += row;
             });
 
+            // Re-adiciona os event listeners aos botões após a tabela ser renderizada
             addEventListenersToButtons();
+            // Atualiza o resumo financeiro
             updateSummary();
         }
 
         function updateSummary() {
+            // Calcula o total cobrado, pago e pendente com base nos dados filtrados
             const totalCharged = postSaleData.reduce((sum, item) => sum + item.value, 0);
             const totalPaid = postSaleData.filter(item => item.status === 'Pago').reduce((sum, item) => sum + item.value, 0);
             const totalPending = postSaleData.filter(item => item.status === 'Pendente').reduce((sum, item) => sum + item.value, 0);
 
+            // Atualiza os elementos HTML do resumo
             document.getElementById('totalCharged').textContent = formatCurrency(totalCharged);
             document.getElementById('totalPaid').textContent = formatCurrency(totalPaid);
             document.getElementById('totalPending').textContent = formatCurrency(totalPending);
         }
 
+        // --- Event Listeners para Interatividade da UI ---
+
+        // Adiciona listeners para os campos de filtro (input text, date, select)
         filterInputs.forEach(input => {
             input.addEventListener('input', (e) => {
                 const column = e.target.id.replace('filter', '').toLowerCase();
                 currentFilters[column] = e.target.value;
-                renderTable();
+                renderTable(); // Re-renderiza a tabela ao filtrar
             });
         });
 
+        // Listeners para os botões de navegação (abas)
         showDetailedViewButton.addEventListener('click', () => {
             detailedView.classList.remove('hidden');
             summaryView.classList.add('hidden');
@@ -445,52 +474,62 @@
         showSummaryViewButton.addEventListener('click', () => {
             detailedView.classList.add('hidden');
             summaryView.classList.remove('hidden');
-            showSummaryViewButton.classList.remove('bg-[#00A1E4]', 'text-white', 'hover:bg-[#33BFE8]');
+            showSummaryViewButton.classList.remove('bg-gray-200', 'text-gray-700', 'hover:bg-gray-300');
             showSummaryViewButton.classList.add('bg-[#00A1E4]', 'text-white', 'hover:bg-[#33BFE8]');
             showDetailedViewButton.classList.remove('bg-[#00A1E4]', 'text-white', 'hover:bg-[#33BFE8]');
             showDetailedViewButton.classList.add('bg-gray-200', 'text-gray-700', 'hover:bg-gray-300');
-            updateSummary();
+            updateSummary(); // Garante que o resumo esteja atualizado ao ser visualizado
         });
 
+        // Abre o modal para adicionar uma nova entrada
         addNewEntryButton.addEventListener('click', () => {
             modalTitle.textContent = 'Adicionar Nova Entrada';
-            entryForm.reset();
-            editingDocId = null;
-            modalStatus.value = 'Pendente';
-            entryModal.classList.remove('hidden');
+            entryForm.reset(); // Limpa o formulário do modal
+            editingDocId = null; // Garante que estamos a adicionar, não a editar
+            modalStatus.value = 'Pendente'; // Define o status padrão para nova entrada
+            entryModal.classList.remove('hidden'); // Exibe o modal
         });
 
+        // Fecha o modal
         closeModalButton.addEventListener('click', () => {
             entryModal.classList.add('hidden');
         });
 
+        // Lida com o envio do formulário (adicionar ou editar)
         entryForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
+            e.preventDefault(); // Impede o envio padrão do formulário e o recarregamento da página
 
+            // Coleta os dados dos campos do formulário
             const itemData = {
                 date: modalDate.value,
                 client: modalClient.value,
                 activityType: modalActivityType.value,
                 description: modalDescription.value,
-                value: parseFloat(modalValue.value) || 0,
+                value: parseFloat(modalValue.value) || 0, // Garante que o valor é um número
                 status: modalStatus.value,
                 paymentDate: modalPaymentDate.value,
                 observations: modalObservations.value
             };
 
+            // Chama a função para salvar no Firestore
             await saveEntry(itemData, editingDocId);
-            entryModal.classList.add('hidden');
+            entryModal.classList.add('hidden'); // Esconde o modal
+            // A renderTable() será chamada automaticamente pelo onSnapshot do Firestore
+            // uma vez que os dados forem gravados e o listener notificar a alteração.
         });
 
+        // Adiciona event listeners aos botões de Editar e Excluir na tabela
         function addEventListenersToButtons() {
+            // Adiciona listener para botões de Edição
             document.querySelectorAll('.edit-btn').forEach(button => {
                 button.addEventListener('click', (e) => {
-                    const docId = e.target.dataset.id;
-                    editingDocId = docId;
-                    const itemToEdit = postSaleData.find(item => item.id === docId);
+                    const docId = e.target.dataset.id; // Pega o ID do documento Firestore
+                    editingDocId = docId; // Define o ID para a edição
+                    const itemToEdit = postSaleData.find(item => item.id === docId); // Encontra o item nos dados carregados
 
                     if (itemToEdit) {
                         modalTitle.textContent = 'Editar Entrada';
+                        // Preenche o formulário do modal com os dados do item
                         modalDate.value = itemToEdit.date;
                         modalClient.value = itemToEdit.client;
                         modalActivityType.value = itemToEdit.activityType;
@@ -499,21 +538,27 @@
                         modalStatus.value = itemToEdit.status;
                         modalPaymentDate.value = itemToEdit.paymentDate;
                         modalObservations.value = itemToEdit.observations;
-                        entryModal.classList.remove('hidden');
+                        entryModal.classList.remove('hidden'); // Exibe o modal
                     }
                 });
             });
 
+            // Adiciona listener para botões de Exclusão
             document.querySelectorAll('.delete-btn').forEach(button => {
                 button.addEventListener('click', async (e) => {
-                    const docId = e.target.dataset.id;
+                    const docId = e.target.dataset.id; // Pega o ID do documento Firestore
+                    // Exibe uma confirmação (em uma app real, use um modal personalizado)
                     if (confirm('Tem certeza que deseja excluir esta entrada?')) {
-                        await deleteEntry(docId);
+                        await deleteEntry(docId); // Chama a função para excluir no Firestore
+                        // A renderTable() será chamada automaticamente pelo onSnapshot do Firestore
                     }
                 });
             });
         }
 
+        // --- Inicialização da Aplicação ---
+        // Inicia o processo de inicialização do Firebase e autenticação
+        // Após a autenticação, o listener do Firestore será ativado para carregar os dados.
         initializeFirebase();
     </script>
 </body>
